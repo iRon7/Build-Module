@@ -17,16 +17,18 @@ Build-Module
 
 Build a new module (`.psm1`) file from a folder containing PowerShell scripts (`.ps1` files) and other resources.
 
-This module builder doesn't take care of the module manifest (`.psd1`) file, but it simply build the module file
+This module builder doesn't take care of the module manifest (`.psd1` file), but it simply builds the module file
 from the scripts and resources in the specified folder while taking of the following:
 
-* merging the statements (e.g. `#Requires` and `using` statements)
-* preventing duplicates and collisions (e.g. duplicate function names)
+* Merging the statements (e.g. `#Requires` and `using` statements)
+* Preventing duplicates and collisions (e.g. duplicate function names)
 * Ordering the statements based on their dependencies (e.g. classes inheritance)
-* formatting the output.
+* Formatting the output.
+* Automatically exporting variables, functions, cmdlets, aliases and types.
 
-It doesn't touch any module settings defined in the module manifest, such as the module Version, NestedModules and
-ScripsToProcess. The only requirement is that the following settings are **not** defined (or commented out):
+It doesn't touch any module settings defined in the module manifest (`.psd1` file), such as the module Version,
+NestedModules and ScripsToProcess. The only requirement is that the following settings are **not** defined
+(or commented out):
 
 * ~~FunctionsToExport = @()~~
 * ~~VariablesToExport = @()~~
