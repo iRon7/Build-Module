@@ -154,7 +154,7 @@ will be merged and added to the module file.
 This module builder design enforces the use of advanced functions and prevents coincidentally interfering with
 other cmdlets or other items in the module framework. See also [Add `ScriptsToInclude` to the Module Manifest][4].
 
-#### Cmdlet Prototype
+#### Cmdlet Prototype Pester testing
 
 This concept facilitates troubleshooting and testing prototypes without (re)building a new module:
 
