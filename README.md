@@ -59,8 +59,8 @@ The accepted statement types are categorized and loaded in the following order:
 * [enum types](#enum-types)
 * [Classes](#classes)
 * [Variables assignments](#variables-assignments)
-* [(private) Functions](#private-functions)
-* [(public) Cmdlets](#public-cmdlets)
+* [(private) Functions]
+* [(public) Cmdlets]
 * [Aliases](#aliases)
 * [Format files](#format-files)
 
@@ -86,7 +86,7 @@ If multiple `#required -Modules` statements are found, the module names will be 
 If set in any script, the module builder will add the `#Requires -RunAsAdministrator` statement to the top of the
 module file.
 
-> [!TIP](#tip)
+> [!TIP]
 > Consider to make your function [self-elevating](https://stackoverflow.com/q/60209449/1701026).
 
 ### Using statements
@@ -110,7 +110,7 @@ The module builder will reformat the assembly path and merge the assembly names 
 
 `Enum` and `Flags` types are reformatted using the explicit item value and added or merged them accordingly.
 
-> [!NOTE](#note)
+> [!NOTE]
 > All types are [automatically added to the TypeAccelerators list][2] to make sure they are publicly available.
 
 ### Classes
@@ -119,20 +119,20 @@ The module builder will reformat the assembly path and merge the assembly names 
 If conflicting there are multiple classes with the same name a merge conflict exception is thrown unless the
 content of the class is exactly the same.
 
-> [!NOTE](#note)
+> [!NOTE]
 > All types are [automatically added to the TypeAccelerators list][2] to make sure they are publicly available.
 
-> [!WARNING](#warning)
+> [!WARNING]
 > PowerShell classes do have some known [limitation][3] and know [issues][4] that might cause problems when using
 > a module builder. For example, when dividing classes that are depended of each other over multiple files would
-> lead to "*Unable to find type [<typename>](#typename)*" in the "PROBLEMS" tab. The only solution is to put these classes
+> lead to "*Unable to find type [<typename>]*" in the "PROBLEMS" tab. The only solution is to put these classes
 > in the same file or neglect the specific problem.
 
 ### Variables assignments
 
 The module builder will merge the variable assignments and add export them when the module is loaded.
 
-> [!TIP](#tip)
+> [!TIP]
 > For variables that are dynamically assigned during module load time, consider to use the `ScriptsToProcess`
 > setting in the module manifest instead or define the variable during the concerned function or class execution.
 
@@ -142,7 +142,7 @@ Any function that is defined in the source scripts will be added to the module f
 Meaning the function will not be exported by the module builder and will not be available to the user
 when the module is loaded. The function will only be available to other functions in the module file.
 To export a function as a cmdlet, the function needs to be defined in a script file with the `.ps1` extension,
-see: [(public) cmdlets](#public-cmdlets).
+see: [(public) cmdlets].
 
 ### (Public) cmdlets
 
@@ -154,12 +154,43 @@ will be merged and added to the module file.
 This module builder design enforces the use of advanced functions and prevents coincidentally interfering with
 other cmdlets or other items in the module framework. See also [Add `ScriptsToInclude` to the Module Manifest][4].
 
+#### Cmdlet Prototype
+
+This concept facilitates troubleshooting and testing prototypes without (re)building a new module:
+
+```PowerShell
+#Requires -Modules @{ModuleName="Pester"; ModuleVersion="5.5.0"}
+
+using module MyModule
+
+param([alias("Path")]$PrototypePath)
+
+Describe 'Test-Object' {
+
+    BeforeAll {
+
+        if ($PrototypePath) {
+            $Content = Get-Content -Raw -LiteralPath $PrototypePath
+            $CommandName = [io.path]::GetFileNameWithoutExtension($PSCommandPath) -replace '\.Tests$'
+            Mock $CommandName ([ScriptBlock]::Create($Content))
+        }
+    }
+
+    ...
+```
+
+Testing a prototype:
+
+```PowerShell
+. Tests\MyCmdlet.Tests.ps1 Source\Cmdlets\MyCmdlet.ps1
+```
+
 ### Aliases
 
 This module builder only supports aliases for (public) cmdlets (exported functions). A cmdlet alias might be set
 using the [Alias Attribute Declaration][6], this will export the alias when the module is loaded.
 
-> [!NOTE](#note)
+> [!NOTE]
 > The [`Set-Alias`](https://go.microsoft.com/fwlink/?LinkID=2096625) command statement is rejected as aliases should be avoided for private functions as they can
 > make code difficult to read, understand and impact availability (see: [AvoidUsingCmdletAliases][7]).
 
@@ -204,7 +235,7 @@ The source folder containing the PowerShell scripts and resources to build the m
 
 The path to the module file to create.
 
-> [!WARNING](#warning)
+> [!WARNING]
 > The module file will be overwritten if it already exists.
 
 .PARAMETERS Depth
