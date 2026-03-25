@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION 0.1.0
+.VERSION 0.1.1
 .GUID 19631007-c6ce-4a9f-a32c-dc87fdc8c1ff
 .AUTHOR Ronald Bode (iRon)
 .DESCRIPTION Build a new module file.
@@ -170,6 +170,34 @@ will be merged and added to the module file.
 This module builder design enforces the use of advanced functions and prevents coincidentally interfering with
 other cmdlets or other items in the module framework. See also [Add `ScriptsToInclude` to the Module Manifest][4].
 
+#### Cmdlet Prototype Pester testing
+
+This concept facilitates troubleshooting and testing prototypes without (re)building a new module:
+
+    #Requires -Modules @{ModuleName="Pester"; ModuleVersion="5.5.0"}
+
+    using module MyModule
+
+    param([alias("Path")]$PrototypePath)
+
+    Describe 'Test-Object' {
+
+        BeforeAll {
+
+            if ($PrototypePath) {
+                $Content = Get-Content -Raw -LiteralPath $PrototypePath
+                $CommandName = [io.path]::GetFileNameWithoutExtension($PSCommandPath) -replace '\.Tests$'
+                Mock $CommandName ([ScriptBlock]::Create($Content))
+            }
+        }
+
+        ...
+
+Testing a prototype:
+
+    . Tests\MyCmdlet.Tests.ps1 Source\Cmdlets\MyCmdlet.ps1
+
+
 ### Aliases
 
 This module builder only supports aliases for (public) cmdlets (exported functions). A cmdlet alias might be set
@@ -234,6 +262,7 @@ The depth of the source folder structure to search for scripts and resources. De
 [8]: https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_types.ps1xml "about Types.ps1xml"
 #>
 
+[Diagnostics.CodeAnalysis.SuppressMessage('PSUseApprovedVerbs', '', Scope = 'function', Target = '' )]
 param(
     [Parameter(Mandatory = $true, ValueFromPipeline = $true)][String]$SourceFolder,
     [Parameter(Mandatory = $true)][String]$ModulePath,
@@ -241,27 +270,95 @@ param(
 )
 
 Begin {
+    $ErrorActionPreference = "Stop"
 
     $Script:SourcePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($SourceFolder)
 
-    function Use-Script([Alias('Name')][String]$ScriptName, [Alias('Version')][Version]$ScriptVersion) {
-        $Command = Get-Command $ScriptName -ErrorAction SilentlyContinue
-        if (
-            -not $Command -and
-            -not ($ScriptVersion -and (Get-PSScriptFileInfo $Command.Source).Version -lt $ScriptVersion) -and
-            -not (Install-Script $ScriptName -MinimumVersion $ScriptVersion -PassThru)
-        ) {
-            $MissingVersion = if ($ScriptVersion) { " version $ScriptVersion" }
-            $ErrorRecord = [ErrorRecord]::new(
-                "Missing command: '$ScriptName'$MissingVersion.",
-                'MissingScript', 'InvalidArgument', $ScriptName
-            )
-            $PSCmdlet.ThrowTerminatingError($ErrorRecord)
+    function Sort-Topological { # https://github.com/iRon7/Sort-Topological
+        [CmdletBinding()]Param(
+            [Parameter(ValueFromPipeline = $True, Mandatory = $True)]$InputObject,
+            [Parameter(Position = 0, Mandatory = $True)][Alias('DependencyName')]$EdgeName,
+            [Parameter(Position = 1)][Alias('NameId')][String]$IdName
+        )
+
+        function Throw-Error($ErrorRecord) { $PSCmdlet.ThrowTerminatingError($ErrorRecord) }
+
+        if ($EdgeName -is [ScriptBlock]) { # Prevent code injection
+            $Ast = [System.Management.Automation.Language.Parser]::ParseInput($EdgeName, [ref]$null, [ref]$null)
+            $Expression = $Ast.EndBlock.Statements.PipelineElements.Expression
+            While ($Expression -is [MemberExpressionAst] -and $Expression.Member -is [StringConstantExpressionAst]) {
+                $Expression = $Expression.Expression
+            }
+            if ($Expression -isnot [VariableExpressionAst] -or $Expression.VariablePath.UserPath -notin '_', 'PSItem') {
+                $Message = "The { $Expression } expression should contain safe path."
+                Throw-Error ([ErrorRecord]::new($Message, 'InvalidIdExpression', 'InvalidArgument', $Expression))
+            }
         }
+        elseif ($Null -ne $IdName -and $IdName -isnot [String]) { $IdName = "$IdName" }
+
+        Function FormatId ($Vertex) {
+            if ($Vertex -is [ValueType] -or $Vertex -is [String]) { $Value = $Vertex }
+            elseif (@($_.PSObject.Properties.Name).Contains($IdName)) { $Value = $_.PSObject.Properties[$IdName].Value }
+            else { return "[$(@($List).IndexOf($Vertex))]" }
+            if ($Value -is [String]) { """$Value""" } else { $Value }
+        }
+
+        $ById = $Null
+        $Sorted = [List[Object]]::new()
+        if ($Input) { $List = $Input } else { $List = $InputObject }
+        if ($List -isnot [iEnumerable]) { return $List }
+        $EdgeCount = 0
+        while ($Sorted.get_Count() -lt $List.get_Count()) {
+            $Stack = [Stack]::new()
+            $Enumerator = $List.GetEnumerator()
+            while ($Enumerator.MoveNext()) {
+                $Vertex = $Enumerator.Current
+                if($Sorted.Contains($Vertex)) { continue }
+                $Edges = [List[Object]]::new()
+                if ($EdgeName -is [ScriptBlock]) { $Edges = $Vertex.foreach($EdgeName).where{ $Null -ne $_ } }
+                else { $Edges = $Vertex.PSObject.Properties[$EdgeName].Value }
+                if ($Null -eq $Edges) { $Edges = @() } elseif ($Edges -isnot [iList]) { $Edges = @($Edges) }
+                if ($Null -eq $ById -and $Edges.Count -gt 0) {
+                    if ($Edges[0] -is [ValueType] -or $Edges[0] -is [String]) {
+                        if (-not $IdName) {
+                            $Message = 'Dependencies by id require the IdName parameter.'
+                            Throw-Error ([ErrorRecord]::new($Message, 'MissingIdName', 'InvalidArgument', $Vertex))
+                        }
+                        $ById = @{}
+                        foreach ($Item in $List) { $ById[$Item.PSObject.Properties[$IdName].Value] = $Item }
+                    } else { $ById = $False }
+                }
+                if ($ById) {
+                    $Ids = $Edges; $Edges = [List[Object]]::new()
+                    foreach ($Id in $Ids) {
+                        if ($Null -eq $Id) { } elseif ($ById.contains($Id)) { $Edges.Add($ById[$Id]) }
+                        else {
+                            $Message = "Unknown vertex id: $(FormatId $Id)."
+                            Write-Error ([ErrorRecord]::new($Message, 'UnknownVertex', 'InvalidArgument', $Vertex))
+                        }
+
+                    }
+                }
+                if ($Stack.Count -gt 0 -or $Edges.Count -eq $EdgeCount) {
+                    $At = if ($Stack.Count -gt 0) { @($Stack.Current).IndexOf($Vertex) + 1 }
+                    $Stack.Push($Enumerator)
+                    if ($At -gt 0) {
+                        $Message = "Circular dependency: $((@($Stack)[0..$At].Current).foreach{ FormatId $_ } -Join ', ')."
+                        Throw-Error ([ErrorRecord]::new($Message, 'CircularDependency', 'InvalidArgument', $Vertex))
+                    }
+                    $Enumerator = $Edges.GetEnumerator()
+                }
+            }
+            if ($Stack.Count -gt 0) {
+                $Enumerator = $Stack.Pop()
+                $Vertex = $Enumerator.Current
+                if ($Vertex -is [ValueType] -or $Vertex -is [String]) { $Vertex = $ById[$Vertex] }
+                if (-not $Sorted.Contains($Vertex)) { $Sorted.Add($Vertex) }
+            }
+            else { $EdgeCount++ }
+        }
+        $Sorted
     }
-
-    Use-Script -Name Sort-Topological -Version 0.1.2
-
     function New-LocationMessage([String]$Message, [String]$FilePath, $Target) {
         if ($Message -like '*.' -and $Message -notlike '*..') { $Message = $Message.Remove($Message.Length - 1) }
         $Return = "$([char]0x1b)[7m$Message$([char]0x1b)[27m"
@@ -618,7 +715,7 @@ Begin {
                     if (-not $Aliases.ContainsKey($Name)) { $Aliases[$Name] = [List[String]]::new() }
                     $Aliases[$Name].Add($S.Alias[$Name])
                 }
-                $Statements = foreach ($Name in $Aliases.Keys) { "Set-Alias -Name '$($Aliases[$Name])' -Value '$Name'" }
+                $Statements = foreach ($Name in $Aliases.Keys) { "Set-Alias -Name '$Name' -Value '$($Aliases[$Name])'" }
                 $this.AppendRegion('Alias', $Statements)
             }
             if ($S.Contains('Format')) { # https://github.com/PowerShell/PowerShell/issues/17345
